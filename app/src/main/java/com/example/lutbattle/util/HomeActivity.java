@@ -44,16 +44,20 @@ public class HomeActivity extends AppCompatActivity {
             }
         });
 
-        ArrayList<LUTemon> displayedLUT = GameManager.getInstance().getLUTemons();
+        // Get a copy of all LUTemons
+        ArrayList<LUTemon> displayedLUT = new ArrayList<>(GameManager.getInstance().getLUTemons());
+
+        // Filter out LUTemons that are in training
         Iterator<LUTemon> iterator = displayedLUT.iterator();
         while (iterator.hasNext()) {
             LUTemon lutemon = iterator.next();
             if (GameManager.getInstance().getTrainers().contains(lutemon)) {
-                iterator.remove(); // Safely removes the element
+                iterator.remove();
             }
         }
-        ArrayList<LUTemon> lutemons = GameManager.getInstance().getLUTemons();
-        homeAdapter = new HomeAdapter(lutemons);
+
+        // Use the filtered list for the adapter
+        homeAdapter = new HomeAdapter(displayedLUT);
         recyclerView.setAdapter(homeAdapter);
     }
 }

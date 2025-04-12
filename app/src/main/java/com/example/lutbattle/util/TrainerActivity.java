@@ -5,6 +5,8 @@ import com.example.lutbattle.model.*;
 
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
@@ -26,7 +28,14 @@ public class TrainerActivity extends AppCompatActivity {
 
     private GameManager gameManager;
     private LUTemon selectedLutemon;
-    private List<LUTemon> trainingLutemons;
+    private List<LUTemon> availableLutemons;
+
+    // Set training cooldown period (in milliseconds)
+    private static final long TRAINING_COOLDOWN = 60000; // 1 minute (for testing, should be 3600000 for 1 hour in production)
+
+    // Handler for updating the cooldown timer
+    private Handler cooldownHandler;
+    private Runnable cooldownRunnable;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -36,6 +45,9 @@ public class TrainerActivity extends AppCompatActivity {
         // Initialize GameManager instance
         gameManager = GameManager.getInstance();
 
+        // Initialize the handler for updating cooldowns
+        cooldownHandler = new Handler(Looper.getMainLooper());
+
         // Link UI components to variables
         lutemonSpinner = findViewById(R.id.lutemonSpinner);
         lutemonStatsText = findViewById(R.id.lutemonStatsText);
@@ -44,7 +56,7 @@ public class TrainerActivity extends AppCompatActivity {
         homeButton = findViewById(R.id.homeButton);
 
         // Load LUTemons available for training
-        loadTrainingLutemons();
+        loadAvailableLutemons();
 
         // Configure the spinner to display LUTemons
         setupLutemonSpinner();
@@ -57,14 +69,49 @@ public class TrainerActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         // Refresh LUTemon data and update the spinner when returning to this activity
-        loadTrainingLutemons();
+        loadAvailableLutemons();
         updateSpinner();
+
+        // Start the cooldown timer update
+        startCooldownUpdates();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // Stop the cooldown timer when the activity is paused
+        stopCooldownUpdates();
+    }
+
+    // Start periodic updates of cooldown timers
+    private void startCooldownUpdates() {
+        stopCooldownUpdates(); // Stop any existing updates
+
+        cooldownRunnable = new Runnable() {
+            @Override
+            public void run() {
+                // Update the UI to show current cooldown status
+                updateButtonStates();
+                // Schedule the next update in 1 second
+                cooldownHandler.postDelayed(this, 1000);
+            }
+        };
+
+        // Start immediate first update
+        cooldownHandler.post(cooldownRunnable);
+    }
+
+    // Stop cooldown timer updates
+    private void stopCooldownUpdates() {
+        if (cooldownHandler != null && cooldownRunnable != null) {
+            cooldownHandler.removeCallbacks(cooldownRunnable);
+        }
     }
 
     // Load LUTemons from GameManager
-    private void loadTrainingLutemons() {
-        trainingLutemons = gameManager.getLUTemons();
-        updateButtonState();
+    private void loadAvailableLutemons() {
+        availableLutemons = new ArrayList<>(gameManager.getLUTemons());
+        updateButtonStates();
     }
 
     // Configure the spinner to display LUTemon names
@@ -78,10 +125,10 @@ public class TrainerActivity extends AppCompatActivity {
         lutemonSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                if (trainingLutemons.size() > position) {
-                    selectedLutemon = trainingLutemons.get(position);
+                if (availableLutemons.size() > position) {
+                    selectedLutemon = availableLutemons.get(position);
                     updateLutemonStats();
-                    updateButtonState();
+                    updateButtonStates();
                 }
             }
 
@@ -89,7 +136,7 @@ public class TrainerActivity extends AppCompatActivity {
             public void onNothingSelected(AdapterView<?> parent) {
                 selectedLutemon = null;
                 lutemonStatsText.setText("No LUTemon selected");
-                updateButtonState();
+                updateButtonStates();
             }
         });
     }
@@ -97,26 +144,28 @@ public class TrainerActivity extends AppCompatActivity {
     // Refresh the spinner with updated LUTemon data
     private void updateSpinner() {
         ArrayAdapter<String> adapter = (ArrayAdapter<String>) lutemonSpinner.getAdapter();
-        adapter.clear();
-        adapter.addAll(getLutemonNames());
-        adapter.notifyDataSetChanged();
+        if (adapter != null) {
+            adapter.clear();
+            adapter.addAll(getLutemonNames());
+            adapter.notifyDataSetChanged();
+        }
 
-        if (trainingLutemons.isEmpty()) {
-            lutemonStatsText.setText("No LUTemons in training area");
+        if (availableLutemons.isEmpty()) {
+            lutemonStatsText.setText("No LUTemons available");
             selectedLutemon = null;
         } else if (lutemonSpinner.getSelectedItemPosition() >= 0 &&
-                lutemonSpinner.getSelectedItemPosition() < trainingLutemons.size()) {
-            selectedLutemon = trainingLutemons.get(lutemonSpinner.getSelectedItemPosition());
+                lutemonSpinner.getSelectedItemPosition() < availableLutemons.size()) {
+            selectedLutemon = availableLutemons.get(lutemonSpinner.getSelectedItemPosition());
             updateLutemonStats();
         }
 
-        updateButtonState();
+        updateButtonStates();
     }
 
     // Retrieve LUTemon names for the spinner
     private List<String> getLutemonNames() {
         ArrayList<String> names = new ArrayList<>();
-        for (LUTemon lutemon : trainingLutemons) {
+        for (LUTemon lutemon : availableLutemons) {
             names.add(lutemon.getName());
         }
         return names;
@@ -132,10 +181,32 @@ public class TrainerActivity extends AppCompatActivity {
                             "Level: " + selectedLutemon.getLevel() + "\n" +
                             "HP: " + selectedLutemon.getHp() + "\n" +
                             "Attack: " + selectedLutemon.getAttack() + "\n" +
-                            "Defense: " + selectedLutemon.getDefense()
+                            "Defense: " + selectedLutemon.getDefense() + "\n" +
+                            getTrainingStatusText(selectedLutemon)
             );
         } else {
             lutemonStatsText.setText("No LUTemon selected");
+        }
+    }
+
+    // Get text describing training status
+    private String getTrainingStatusText(LUTemon lutemon) {
+        long currentTime = System.currentTimeMillis();
+        long lastTrainedTime = lutemon.getLastTrainedTime();
+
+        if (lastTrainedTime == 0) {
+            return "Training Status: Ready";
+        }
+
+        long timeSinceTraining = currentTime - lastTrainedTime;
+        if (timeSinceTraining >= TRAINING_COOLDOWN) {
+            return "Training Status: Ready";
+        } else {
+            long remainingTimeMillis = TRAINING_COOLDOWN - timeSinceTraining;
+            int remainingMinutes = (int) (remainingTimeMillis / 60000);
+            int remainingSeconds = (int) ((remainingTimeMillis / 1000) % 60);
+            return String.format("Training Status: Cooldown (%d:%02d remaining)",
+                    remainingMinutes, remainingSeconds);
         }
     }
 
@@ -175,7 +246,7 @@ public class TrainerActivity extends AppCompatActivity {
         homeButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                SendSelectedLutemonHome();
+                sendSelectedLutemonHome();
             }
         });
     }
@@ -185,25 +256,29 @@ public class TrainerActivity extends AppCompatActivity {
         if (selectedLutemon != null) {
             long currentTime = System.currentTimeMillis();
             long lastTrainedTime = selectedLutemon.getLastTrainedTime();
-            long oneHourInMillis = 60; // 1 hour in milliseconds
 
-            if (lastTrainedTime == 0 || currentTime - lastTrainedTime >= oneHourInMillis) {
+            if (lastTrainedTime == 0 || currentTime - lastTrainedTime >= TRAINING_COOLDOWN) {
+                // Train the LUTemon
                 selectedLutemon.LevelUp();
-                gameManager.addTrainer(selectedLutemon);
                 selectedLutemon.setLastTrainedTime(currentTime);
+
+                // Add to trainers list if not already there
+                if (!gameManager.getTrainers().contains(selectedLutemon)) {
+                    gameManager.addTrainer(selectedLutemon);
+                }
 
                 Toast.makeText(this, selectedLutemon.getName() + " trained! Level up to " +
                         selectedLutemon.getLevel(), Toast.LENGTH_SHORT).show();
 
-                updateTrainingAvailability();
+                // Update UI
                 updateLutemonStats();
-                updateButtonState();
-                updateSpinner();
+                updateButtonStates();
             } else {
-                long remainingTimeMillis = oneHourInMillis - (currentTime - lastTrainedTime);
-                int remainingMinutes = (int) (remainingTimeMillis / (60 * 1000));
+                // Calculate and display remaining cooldown time
+                long remainingTimeMillis = TRAINING_COOLDOWN - (currentTime - lastTrainedTime);
+                int remainingMinutes = (int) (remainingTimeMillis / 60000);
                 int remainingSeconds = (int) ((remainingTimeMillis / 1000) % 60);
-                updateTrainingAvailability();
+
                 Toast.makeText(this, selectedLutemon.getName() + " is still recovering from training! " +
                                 "Available in " + remainingMinutes + " min " + remainingSeconds + " sec",
                         Toast.LENGTH_LONG).show();
@@ -213,25 +288,28 @@ public class TrainerActivity extends AppCompatActivity {
         }
     }
 
-
-    private void SendSelectedLutemonHome() {
+    // Send the selected LUTemon back to home
+    private void sendSelectedLutemonHome() {
         if (selectedLutemon != null) {
             long currentTime = System.currentTimeMillis();
             long lastTrainedTime = selectedLutemon.getLastTrainedTime();
-            long oneHourInMillis = 60; // 1 hour in milliseconds
 
-            if (lastTrainedTime == 0 || currentTime - lastTrainedTime >= oneHourInMillis) {
+            if (lastTrainedTime == 0 || currentTime - lastTrainedTime >= TRAINING_COOLDOWN) {
+                // Remove from trainers list
                 gameManager.removeTrainer(selectedLutemon);
 
-                Toast.makeText(this, selectedLutemon.getName() + " was sent home" +
-                        selectedLutemon.getLevel(), Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, selectedLutemon.getName() + " was sent home",
+                        Toast.LENGTH_SHORT).show();
 
-                updateTrainingAvailability();
+                // Refresh the list and UI
+                loadAvailableLutemons();
+                updateSpinner();
             } else {
-                long remainingTimeMillis = oneHourInMillis - (currentTime - lastTrainedTime);
-                int remainingMinutes = (int) (remainingTimeMillis / (60 * 1000));
+                // Calculate and display remaining cooldown time
+                long remainingTimeMillis = TRAINING_COOLDOWN - (currentTime - lastTrainedTime);
+                int remainingMinutes = (int) (remainingTimeMillis / 60000);
                 int remainingSeconds = (int) ((remainingTimeMillis / 1000) % 60);
-                updateTrainingAvailability();
+
                 Toast.makeText(this, selectedLutemon.getName() + " is still recovering from training! " +
                                 "Available in " + remainingMinutes + " min " + remainingSeconds + " sec",
                         Toast.LENGTH_LONG).show();
@@ -241,32 +319,36 @@ public class TrainerActivity extends AppCompatActivity {
         }
     }
 
-    // Update the training button based on cooldown status
-    private void updateTrainingAvailability() {
-        if (selectedLutemon != null) {
-            long currentTime = System.currentTimeMillis();
-            long lastTrainedTime = selectedLutemon.getLastTrainedTime();
-            long oneHourInMillis = 60;
-
-            if (lastTrainedTime == 0 || currentTime - lastTrainedTime >= oneHourInMillis) {
-                trainButton.setEnabled(true);
-                trainButton.setText("Train");
-                homeButton.setEnabled(true);
-
-            } else {
-                long remainingTimeMillis = oneHourInMillis - (currentTime - lastTrainedTime);
-                int remainingMinutes = (int) (remainingTimeMillis / (60 * 1000));
-
-                trainButton.setEnabled(false);
-                homeButton.setEnabled(false);
-                trainButton.setText("Train (Available in " + remainingMinutes + " min)");
-            }
+    // Update all button states based on the current context
+    private void updateButtonStates() {
+        if (selectedLutemon == null) {
+            // No LUTemon selected
+            trainButton.setEnabled(false);
+            trainButton.setText("Train");
+            homeButton.setEnabled(false);
+            return;
         }
-    }
 
-    // Enable or disable buttons based on LUTemon selection
-    private void updateButtonState() {
-        boolean hasSelection = selectedLutemon != null;
-        trainButton.setEnabled(hasSelection);
+        long currentTime = System.currentTimeMillis();
+        long lastTrainedTime = selectedLutemon.getLastTrainedTime();
+        boolean isOnCooldown = lastTrainedTime > 0 && currentTime - lastTrainedTime < TRAINING_COOLDOWN;
+
+        // Update train button
+        trainButton.setEnabled(!isOnCooldown);
+        if (isOnCooldown) {
+            long remainingTimeMillis = TRAINING_COOLDOWN - (currentTime - lastTrainedTime);
+            int remainingMinutes = (int) (remainingTimeMillis / 60000);
+            int remainingSeconds = (int) ((remainingTimeMillis / 1000) % 60);
+            trainButton.setText(String.format("Train (Available in %d:%02d)",
+                    remainingMinutes, remainingSeconds));
+        } else {
+            trainButton.setText("Train");
+        }
+
+        // Update home button
+        homeButton.setEnabled(!isOnCooldown);
+
+        // Update the LUTemon stats to reflect current status
+        updateLutemonStats();
     }
 }
